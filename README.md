@@ -1,4 +1,5 @@
-##geerpc整体架构
+##类图
+![avatar](https://github.com/CiachoG/GaoRpC/blob/main/class.png)
 
 ##TODO:实现：
 ####调用服务方法-映射过程自动化
