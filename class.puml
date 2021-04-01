@@ -1,0 +1,146 @@
+@startuml
+package "codec" #DDDDDD {
+  interface CodeC
+
+  CodeC <|.. GobCodec
+  CodeC <|.. JsonCodec
+
+  interface CodeC{
+    io.Closer
+  	ReadHeader (*Header) error
+  	ReadBody (interface{})error
+  	Write(*Header,interface{})error
+  }
+  class GobCodec  {
+      coon io.ReadWriteCloser//tcp或者unix建立socket时得到的连接实例
+      buf *bufio.Writer//带缓冲的writer，防止阻塞
+      dec *gob.Decoder //gob解码器
+      enc *gob.Encoder //gob编码器
+      *New() //构造函数，在golang中并没有包含在struct里面，写成工厂方法，下同
+      ReadHeader (*Header) error
+      ReadBody (interface{})error
+      Write(*Header,interface{})error
+      Close() error`
+  }
+  note top: Gob编解码器，实现CodeC接口
+  class JsonCodec  {
+
+  }
+  note top: Json编解码器，实现CodeC接口
+
+  class Header {
+      ServiceMethod string //service.method
+      Seq uint64 //请求序号
+      Error string //错误消息，client发起时为空
+  }
+  note top: 请求头
+
+  enum const {
+      GodType
+      JsonType
+      NewCodeFuncMap //编解码器构造方法map
+  }
+  enum type {
+    Type string
+  }
+}
+
+package "server" #DDDDDD{
+    CodeC <--* Server
+    const <.. Server
+    type <.. Option
+    Header <--* request
+    methodType <--* service
+    service <--* Server
+    Option <.. Server
+    request <.. Server
+    class Server {
+        serviceMap sync.Map
+        *New()
+        Register(interface{}) error //服务注册接口
+        findService(string)(svc *service, mtype *methodType, err error) //找到已经注册的服务和接口
+        Accept(net.Listener) //接受连接，并开启子协程处理连接
+        ServeConn(io.ReadWriteCloser) //协议对接，获得编解码器构造函数
+        serveCodec(codec.CodeC) //聚合readRequest，handleRequest
+        readRequestHeader(codec.CodeC) //读取请求头
+        readRequest(codec.CodeC) //读取请求
+        handleRequest(codec.CodeC,request,sending *sync.Mutex,*sync.WaitGroup) //处理请求
+        sendResponse(codec.CodeC,*codec.Header,interface{},*sync.Mutex)//应答
+    }
+
+    note right: 协议协商
+
+    class request  {
+    	h * codec.Header
+    	argv,replyv reflect.Value //未知参数和返回的类型
+    }
+
+    class methodType {
+        method reflect.Method //方法本身
+    	ArgType reflect.Type //第一个参数的类型
+    	ReplyType reflect.Type //第二个参数的类型
+    	numCalls uint64 //用于统计调用次数
+    	newArgv() reflect.Value //创建第一个参数对应类型的实例
+    	newReplyV() reflect.Value //创建第二个参数对应类型的实例
+    }
+
+    class service {
+    	name string  //映射的结构体的名称
+    	typ reflect.Type //结构体的类型
+    	rcvr reflect.Value //结构体的实例本身
+    	method map[string]*methodType //存储结构体所有符合条件的方法
+    	newService(rcvr interface{})*service
+    	registerMethods()
+    	isExportedOrBuiltinType(t reflect.Type) bool //是否导出或者内置
+    	call(m *methodType,argv,replyV reflect.Value)error //调用
+    }
+    class Option{
+        MagicNumber int  //标记是grpc的请求
+        CodeType codec.Type //编解码类型
+    }
+}
+package client #DDDDDD{
+    CodeC <--* Client
+    Header <--* Client
+    Call <--* Client
+    Option <--* Client
+    Client <--*clientResult
+    class Call  {
+        Seq uint64 //序号
+        ServiceMethod string //服务.方法
+        Args interface{} // 参数
+        Reply interface{} //返回
+        Error error  //错误
+        Done  chan *Call  //支持异步调用，当调用结束时，会调用call.done通知对方
+        done()
+    }
+
+    class Client {
+    	cc codec.CodeC //编解码器
+    	opt *Option //协议协商
+    	header codec.Header //每个请求的消息头，只在请求发送时才需要，请求是互斥的，因此每个客户端仅需要一个
+    	sending sync.Mutex //和server类似，用来保证请求的有序发送，防止多个报文混淆
+    	mu sync.Mutex
+    	seq uint64 //发送的编号，具有唯一性
+    	pending map[uint64]*Call//存储未处理完的请求，键值是编号
+    	closing bool //用户主动关闭
+    	shutdown bool //发生错误时关闭
+    	newClientCodec(cc codec.CodeC,opt *Option)*Client
+    	Close() error
+    	IsAvailable()bool
+    	registerCall(call *Call)(uint64,error) //每次调用产生一个call
+    	removeCall(seq uint64)*Call
+    	terminateCalls(err error)
+    	receive()
+    	Go(serviceMethod string,args,reply interface{},done chan *Call)*Call //异步接口
+    	Call(serviceMethod string,args,reply interface{})error //同步接口
+    	Dial(network,address string,opts ...*Option)
+    	parseOptions(opts ...*Option)(*Option,error)
+    }
+
+    class clientResult  {
+    	client *Client
+    	err error
+    }
+}
+@enduml
